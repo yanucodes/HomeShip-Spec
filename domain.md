@@ -68,3 +68,35 @@ Wherever this spec says "today", it means the ship day (`TIME-SHIP-DAY`) of the 
 ### TIME-DATES — Dates are ship days; no times are recorded
 
 Every date the API accepts or returns for a ship or its items (e.g. a due date) is a ship day (`TIME-SHIP-DAY`) of that ship. The API records and returns dates only: no times of day, no timezones.
+
+## Alert states
+
+Every task and every supply has exactly one alert state at any time. Alert states are a vocabulary shared by tasks and supplies, so a ship's overall state is computed the same way from both. How an item's alert state is determined is defined per item type (see Tasks, Supplies); what alert states do to the ship is defined under Ships.
+
+### ALERT-LEVELS — The alert states and their order
+
+| Alert state | Meaning |
+|---|---|
+| green | On track. |
+| yellow | Needs attention. |
+| red | Critical. |
+| auto-destruct | Self-destruct sequence running: unless the item is resolved in time, the ship's journey is lost. |
+| inactive | Muted: the item still exists but is not tracked, and has no effect on the ship. |
+
+The tracked states are ordered by severity: green < yellow < red < auto-destruct. Inactive is outside this order: it is neither better nor worse than any other state.
+
+### ALERT-DERIVED — Alert states are never set directly
+
+No one sets an item's alert state directly. It always follows from the item's own data, the crew's actions on it (such as postponing a task or changing a supply's stock), and the passing of days, as defined per item type.
+
+### ALERT-ESCALATION — Escalating raises an alert by one level
+
+Escalating moves an alert one step up the severity order. Auto-destruct is the top of the order and stays auto-destruct; inactive is outside the order and stays inactive. Which events escalate an item is defined per item type.
+
+| Before | After escalating |
+|---|---|
+| green | yellow |
+| yellow | red |
+| red | auto-destruct |
+| auto-destruct | auto-destruct |
+| inactive | inactive |
