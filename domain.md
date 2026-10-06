@@ -7,6 +7,7 @@ What ships, crew, tasks and supplies are, and how their states change over time.
 | Setting | Default | Valid values | Meaning | Rules |
 |---|---|---|---|---|
 | `DAILY_ROLLOVER_HOUR` | `3` | integer 0–23 | Ship-local hour at which a new ship day begins. | `TIME-SHIP-DAY` |
+| `DEFAULT_POSTPONE_DAYS` | `3` | integer 1–3650 | Days a task's due date moves out when it goes up a level without the crew choosing a new date. Also the least a recurring task can be postponed by. | `TASK-MISSED`, `TASK-POSTPONE` |
 
 ## Time
 
@@ -65,6 +66,8 @@ Wherever this spec says "today", it means the ship day (`TIME-SHIP-DAY`) of the 
 
 *Example:* a crew member of a `Europe/Berlin` ship acts at 00:30 local time on 2026-01-15. For that action, today is 2026-01-14.
 
+A date is **past** (in the past) when it's before today, and **future** (in the future) when it's after today. Today itself is neither.
+
 ### TIME-DATES — Dates are ship days; no times are recorded
 
 Every date the API accepts or returns for a ship or its items (e.g. a due date) is a ship day (`TIME-SHIP-DAY`) of that ship. The API records and returns dates only: no times of day, no timezones.
@@ -100,3 +103,253 @@ Escalating moves an alert one step up the severity order. Auto-destruct is the t
 | red | auto-destruct |
 | auto-destruct | auto-destruct |
 | inactive | inactive |
+
+## Tasks
+
+A task is a household chore the crew keeps track of, e.g. "Laundry" or "Water the plants".
+
+### TASK-FIELDS — What a task records
+
+| Field | Meaning | Values |
+|---|---|---|
+| `content` | What the task is. | Text. Surrounding whitespace is removed; what remains is 1–200 characters, counted as Unicode code points. Several tasks may have the same content. |
+| `frequency` | How often the task recurs. | A whole number of days from 1 to 3650; or none. |
+| `date_last` | The ship day the task was last completed. | A date, or none if it hasn't been completed. |
+| `date_due` | The ship day by which the task should next be completed. | A date, or none. A due date the crew provides (creating, postponing, reactivating) is at most 3650 days after today; otherwise the request is refused. |
+| `alert_state` | How urgent the task is (`ALERT-LEVELS`). | Derived (`ALERT-DERIVED`) by the rules in this section. |
+| `days_left` | Only while the task is paused: the days that were left until its due date when it was deactivated. | An integer ≥ 0, or none. |
+| `frozen_alert` | Only while the task is paused: the alert state it had when it was deactivated. | green, yellow or red; or none. |
+
+A task with a frequency is **recurring**; a task without one is **one-off**.
+
+### TASK-TRACKED — A task is tracked exactly when its alert state isn't inactive
+
+A task is **tracked** when its alert state is green, yellow, red or auto-destruct, whether it's recurring or one-off. It's **inactive** when its alert state is inactive. The alert state alone decides this; the other fields follow from it:
+- A tracked task always has a due date. An inactive task never has one.
+- An inactive task is **paused** when it has frozen values. `days_left` and `frozen_alert` are always both set or both none, and a tracked task never has them.
+
+| Task | `frequency` | `alert_state` | `date_due` | `days_left`, `frozen_alert` |
+|---|---|---|---|---|
+| Recurring, tracked | a number of days | green, yellow, red or auto-destruct | a date | none |
+| One-off, tracked | none | green, yellow, red or auto-destruct | a date | none |
+| Recurring, inactive | a number of days | inactive | none | set if paused, otherwise none |
+| One-off, inactive | none | inactive | none | set if paused, otherwise none |
+
+In every row, `date_last` is a date if the task has been completed before, and none otherwise.
+
+A tracked task is green exactly when it's on schedule: it hasn't been postponed or gone overdue since it was created, completed or rescued (`TASK-FREQUENCY` row 3).
+
+### TASK-DATE-LAST — `date_last` records only real completions
+
+`date_last` is set only when the crew provides it while creating the task (`TASK-CREATE`), or when the task is completed (`TASK-COMPLETE`). No other action sets, changes or clears it, in particular deactivation, reactivation and frequency changes.
+
+### TASK-DUE-AFTER-LAST — A task is never due on or before its last completion
+
+Whenever a task has both a `date_due` and a `date_last`, the due date is later than `date_last`. A request that would break this is refused and changes nothing.
+
+### TASK-CREATE — Creating a task
+
+The crew provides `content` and, optionally, `frequency`, `date_last` and `date_due`. The request is refused, and no task is created, if:
+- a provided `date_last` is in the future;
+- a provided `date_due` is in the past, or more than 3650 days after today (`TASK-FIELDS`);
+- a provided `date_due` isn't later than a provided `date_last` (`TASK-DUE-AFTER-LAST`);
+- the task is recurring, its scheduled date (below) is past, and no `date_due` is provided;
+- the task is recurring, its scheduled date is past, and the provided `date_due` is more than the task's postpone limit after today (`TASK-POSTPONE`).
+
+These checks apply to a provided `date_due` even when the rules below then ignore it.
+
+A provided `date_last` is kept, for recurring and one-off tasks alike.
+
+**One-off task** (no frequency):
+- With a `date_due`: tracked, green, due on that date.
+- Without one: inactive, not paused.
+
+**Recurring task** (a frequency is given). Its scheduled date S is `date_last` + frequency, or today + frequency if no `date_last` is given:
+
+| S | `date_due` after | `alert_state` after |
+|---|---|---|
+| today or later | S; a provided `date_due` is ignored | green |
+| past | the provided `date_due` (required) | yellow, however far in the past S is |
+
+Examples, with today = 2026-01-20 and the default `DEFAULT_POSTPONE_DAYS` of 3:
+
+| `frequency` | `date_last` | `date_due` given | S | Result |
+|---|---|---|---|---|
+| 7 | 2026-01-15 | – | 2026-01-22 | green, due 2026-01-22 |
+| 7 | 2026-01-15 | 2026-01-25 | 2026-01-22 | green, due 2026-01-22 (given date ignored) |
+| 7 | 2026-01-15 | 2026-01-18 | 2026-01-22 | refused: due date in the past, even though it would be ignored |
+| 7 | – | – | 2026-01-27 | green, due 2026-01-27 |
+| 7 | 2026-01-12 | 2026-01-25 | 2026-01-19 | yellow, due 2026-01-25 |
+| 7 | 2026-01-01 | 2026-01-25 | 2026-01-08 | yellow, due 2026-01-25 |
+| 7 | 2026-01-12 | – | 2026-01-19 | refused: S is past, so a due date is required |
+| 7 | 2026-01-12 | 2026-01-28 | 2026-01-19 | refused: more than 7 days after today |
+| 7 | 2026-01-12 | 2026-01-18 | 2026-01-19 | refused: due date in the past |
+| 1 | 2026-01-15 | 2026-01-23 | 2026-01-16 | yellow, due 2026-01-23 (postpone limit 3 days) |
+| 1 | 2026-01-15 | 2026-01-24 | 2026-01-16 | refused: more than 3 days after today |
+| – | – | 2026-01-25 | – | green, due 2026-01-25 |
+| – | – | 2026-01-18 | – | refused: due date in the past |
+| – | 2026-01-15 | 2026-01-15 | – | refused: due date not after `date_last` |
+| – | – | – | – | inactive |
+
+### TASK-COMPLETE — Completing a task
+
+Completing is allowed at any time, whatever the task's state. `date_last` becomes today. Then:
+
+| Task before | Result |
+|---|---|
+| recurring, tracked (any alert) | due today + frequency, green. An auto-destruct task is resolved (Ships). |
+| one-off, tracked (any alert) | inactive, not paused; `date_due` none. An auto-destruct task is resolved (Ships). |
+| inactive, not paused | nothing else changes. |
+| recurring, paused | stays paused; `days_left` becomes `frequency` and `frozen_alert` green. |
+| one-off, paused | stays inactive, no longer paused: both frozen values become none. |
+
+For a paused task this is the same result as completing it while tracked and deactivating it the same day. (Leaving the frozen values as they were could make a reactivated task due on its own `date_last`, which `TASK-DUE-AFTER-LAST` forbids.)
+
+Completing a task again on the same day gives the same result as completing it once.
+
+*Example:* a weekly task, paused with `days_left` 2 and `frozen_alert` yellow. Completed on 2026-12-10: `date_last` 2026-12-10, `days_left` 7, `frozen_alert` green. Reactivated on 2026-12-12: due 2026-12-19, green.
+
+### TASK-POSTPONE — Postponing a task
+
+Postponing is for a task the crew can't do on the day it's due.
+- Allowed only on the day the task is due (`date_due` is today).
+- The crew picks the new due date, which must be later than today. For a recurring task it can be at most the task's **postpone limit** after today: `frequency` days, or `DEFAULT_POSTPONE_DAYS` days if that's more. For a one-off task, only the general 3650-day limit applies (`TASK-FIELDS`).
+- The alert goes one level up (`ALERT-ESCALATION`): green → yellow, yellow → red.
+- Refused for red and auto-destruct tasks ("no postpones left"), for inactive tasks, and on any day other than the due date. A refused postpone leaves the task unchanged.
+
+The postpone limit is never less than `DEFAULT_POSTPONE_DAYS`, so postponing a task gives at least as much time as missing its due date does (`TASK-MISSED`).
+
+Examples, with the default `DEFAULT_POSTPONE_DAYS` of 3. A weekly task (postpone limit 7 days), green, due 2026-01-20:
+
+| Today | Request | Result |
+|---|---|---|
+| 2026-01-18 | postpone to 2026-01-22 | refused: not due today |
+| 2026-01-20 | postpone to 2026-01-28 | refused: more than 7 days after today |
+| 2026-01-20 | postpone to 2026-01-27 | yellow, due 2026-01-27 |
+| 2026-01-27 | postpone to 2026-01-29 | red, due 2026-01-29 |
+| 2026-01-29 | postpone to 2026-01-30 | refused: red |
+
+A daily task (postpone limit 3 days), green, due 2026-01-20:
+
+| Today | Request | Result |
+|---|---|---|
+| 2026-01-20 | postpone to 2026-01-24 | refused: more than 3 days after today |
+| 2026-01-20 | postpone to 2026-01-23 | yellow, due 2026-01-23 |
+
+### TASK-FREQUENCY — Changing a task's frequency
+
+The crew sets a new frequency, or none. D' = current `date_due` + (new − old frequency). R = `date_last` + new frequency. Rows 1–4 apply when the new frequency is a number of days different from the old one.
+
+| # | Task before | Condition | `date_due` after | `alert_state` after |
+|---|---|---|---|---|
+| 1 | recurring, tracked, green | D' is today or later | D' | green |
+| 2 | recurring, tracked, green | D' is past | unchanged | yellow |
+| 3 | recurring, tracked, yellow/red/auto-destruct; or one-off, tracked (any alert), getting a frequency | has a `date_last`, and R is today or later | R | green (an auto-destruct task is resolved) |
+| 4 | same as row 3 | otherwise | unchanged | unchanged |
+| 5 | recurring, tracked, frequency removed | — | unchanged | unchanged |
+| 6 | inactive (paused or not) | — | stays none; frozen values unchanged | inactive |
+| 7 | any | new = old | unchanged | unchanged |
+
+The new frequency is saved in every row. No row can make a task due on or before its `date_last` (`TASK-DUE-AFTER-LAST`).
+
+Examples for rows 1–2. A green task, frequency 10, due 2026-02-10:
+
+| Today | New frequency | D' | Result |
+|---|---|---|---|
+| 2026-02-05 | 7 | 2026-02-07 | green, due 2026-02-07 |
+| 2026-02-08 | 7 | 2026-02-07 | yellow, due 2026-02-10 |
+| 2026-02-08 | 2 | 2026-02-02 | yellow, due 2026-02-10 |
+
+Examples for rows 3–4. A weekly task completed 2026-02-01, so due 2026-02-08. It's missed twice (`TASK-MISSED`): yellow, due 2026-02-11, then red, due 2026-02-14. Today is 2026-02-12:
+
+| New frequency | R | Result |
+|---|---|---|
+| 14 | 2026-02-15 | green, due 2026-02-15 |
+| 11 | 2026-02-12 | green, due 2026-02-12 |
+| 10 | 2026-02-11 | unchanged: red, due 2026-02-14 |
+
+The same task without a `date_last` (created, never completed) is unchanged by any new frequency (row 4).
+
+Examples for rows 3–4 with a one-off. Completed 2026-02-01, then reactivated with a new due date, 2026-02-20 (green). Today is 2026-02-12:
+
+| Frequency it gets | R | Result |
+|---|---|---|
+| 14 | 2026-02-15 | green, due 2026-02-15 |
+| 7 | 2026-02-08 | unchanged: green, due 2026-02-20 |
+
+*Example:* a one-off created on 2026-01-01 with `date_last` 2026-01-01, due 2026-01-30. The same day it gets frequency 30: R = 2026-01-31, so it's green, due 2026-01-31 (row 3). Then frequency 1: D' = 2026-01-02, so green, due 2026-01-02 (row 1).
+
+### TASK-DEACTIVATE — Deactivating pauses a task
+
+Deactivating a tracked task:
+- `alert_state` becomes inactive, and `date_due` becomes none.
+- `days_left` becomes the number of days from today to the old due date, and `frozen_alert` becomes the old alert state.
+- An auto-destruct task is frozen as red with 0 days left. Deactivating it resolves it (Ships).
+- `frequency` and `date_last` don't change.
+
+Deactivating is idempotent: deactivating a task that's already inactive changes nothing, and the request succeeds.
+
+*Example:* frequency 10, last completed 2026-12-05, due 2026-12-15, green. Deactivated on 2026-12-10: `days_left` 5, `frozen_alert` green.
+
+### TASK-REACTIVATE — Reactivating makes an inactive task tracked again
+
+The request may include a `date_due`.
+
+**A paused task** resumes where it was paused:
+- `alert_state` becomes `frozen_alert`, and `date_due` becomes today + `days_left`.
+- Both frozen values become none.
+- A provided `date_due` is ignored.
+
+*Example:* the task above, reactivated on 2026-12-15: due 2026-12-20, green.
+
+*Example:* a task deactivated at auto-destruct (frozen as red, 0 days left), reactivated on 2026-12-15: due 2026-12-15, red. Unless it's completed that day, it reaches auto-destruct at the next daily advance.
+
+**A task that was never paused** (a one-off created without a due date, a completed one-off, or such a task after getting a frequency) is scheduled as if it were being created now, with its current `frequency` and `date_last` and the provided `date_due` (`TASK-CREATE`):
+- One-off: a `date_due` is required; the task becomes green, due on it.
+- Recurring: S = `date_last` + frequency, or today + frequency without a `date_last`. If S is today or later: green, due S. If S is past: a `date_due` is required, at most the task's postpone limit after today (`TASK-POSTPONE`); the task becomes yellow, due on it.
+- The `TASK-CREATE` checks on a provided `date_due` apply. If a required `date_due` is missing, the request is refused.
+
+This is also how the crew sets a new deadline on a one-off that was completed or created without one.
+
+*Example:* a one-off completed on 2026-12-01. Reactivated on 2026-12-10 with `date_due` 2026-12-20: green, due 2026-12-20. Without a `date_due`: refused.
+
+*Example* (default `DEFAULT_POSTPONE_DAYS` of 3): a never-paused recurring task, frequency 7, last completed 2026-12-01. Reactivated on 2026-12-05: green, due 2026-12-08. Reactivated on 2026-12-10: S = 2026-12-08 is past, so a `date_due` between 2026-12-10 and 2026-12-17 is required; with 2026-12-12, it's yellow, due 2026-12-12.
+
+Reactivating is idempotent: reactivating a task that's already tracked changes nothing, and the request succeeds.
+
+### TASK-MISSED — A missed due date at the daily advance
+
+At the daily advance that starts ship day D, every tracked task due before D goes one level up, except an auto-destruct one:
+- green → yellow and yellow → red: the due date moves `DEFAULT_POSTPONE_DAYS` days later.
+- red → auto-destruct: the due date becomes D. The countdown runs during D; unless the task is resolved on D, the ship is destroyed at the next advance (Ships).
+
+Later advances don't change an auto-destruct task: it stays auto-destruct, and its due date stays its countdown day, even after that day has passed. Inactive tasks aren't affected.
+
+Examples, with the default `DEFAULT_POSTPONE_DAYS` of 3, at the advance that starts 2026-01-21:
+
+| Task before | Result |
+|---|---|
+| green, due 2026-01-21 | unchanged |
+| green, due 2026-01-20 | yellow, due 2026-01-23 |
+| yellow, due 2026-01-20 | red, due 2026-01-23 |
+| red, due 2026-01-20 | auto-destruct, due 2026-01-21 |
+| auto-destruct, due 2026-01-15 | unchanged |
+
+The daily advance takes effect at the very start of the ship day: no action on ship day D sees the ship as it was before D's advance. Every ship day gets its own advance, in order: advances that were missed (e.g. during an outage) are made up one ship day at a time, before anything else (Ships). So when an advance reaches a task, it's at most one day past due, and whenever the crew acts, every tracked task except an auto-destruct one is due today or later.
+
+*Example:* a green task due 2026-01-10. No advance runs from 2026-01-11 until 2026-01-21, when the missed advances are made up in order:
+
+| Advance | Task after |
+|---|---|
+| 2026-01-11 | yellow, due 2026-01-13 |
+| 2026-01-14 | red, due 2026-01-16 |
+| 2026-01-17 | auto-destruct, due 2026-01-17 |
+| 2026-01-18 to 2026-01-21 | unchanged (the ship is destroyed at the 2026-01-18 advance, Ships) |
+
+### TASK-EDIT — Editing a task's content
+
+`content` can be edited at any time, whatever the task's state; nothing else changes.
+
+### TASK-DELETE — Deleting a task
+
+Deleting removes the task, whatever its state. Deleting an auto-destruct task resolves it (Ships).
