@@ -126,7 +126,8 @@ A task with a frequency is **recurring**; a task without one is **one-off**.
 
 A task is **tracked** when its alert state is green, yellow, red or auto-destruct, whether it's recurring or one-off. It's **inactive** when its alert state is inactive. The alert state alone decides this; the other fields follow from it:
 - A tracked task always has a due date. An inactive task never has one.
-- An inactive task is **paused** when it has frozen values. `days_left` and `frozen_alert` are always both set or both none, and a tracked task never has them.
+- An inactive task is either **paused** or not. Deactivating a task pauses it (`TASK-DEACTIVATE`). It stays paused until it's reactivated (`TASK-REACTIVATE`), or, if it's one-off, completed (`TASK-COMPLETE`). Other inactive tasks, such as a one-off created without a due date or a completed one-off, aren't paused.
+- A paused task has both frozen values, `days_left` and `frozen_alert`. Every other task, tracked or inactive, has neither.
 
 | Task | `frequency` | `alert_state` | `date_due` | `days_left`, `frozen_alert` |
 |---|---|---|---|---|
@@ -304,7 +305,7 @@ The request may include a `date_due`.
 
 *Example:* a task deactivated at auto-destruct (frozen as red, 0 days left), reactivated on 2026-12-15: due 2026-12-15, red. Unless it's completed that day, it reaches auto-destruct at the next daily advance.
 
-**A task that was never paused** (a one-off created without a due date, a completed one-off, or such a task after getting a frequency) is scheduled as if it were being created now, with its current `frequency` and `date_last` and the provided `date_due` (`TASK-CREATE`):
+**A task that isn't paused** (a one-off created without a due date, a completed one-off, or such a task after getting a frequency) is scheduled as if it were being created now, with its current `frequency` and `date_last` and the provided `date_due` (`TASK-CREATE`):
 - One-off: a `date_due` is required; the task becomes green, due on it.
 - Recurring: S = `date_last` + frequency, or today + frequency without a `date_last`. If S is today or later: green, due S. If S is past: a `date_due` is required, at most the task's postpone limit after today (`TASK-POSTPONE`); the task becomes yellow, due on it.
 - The `TASK-CREATE` checks on a provided `date_due` apply. If a required `date_due` is missing, the request is refused.
@@ -313,7 +314,7 @@ This is also how the crew sets a new deadline on a one-off that was completed or
 
 *Example:* a one-off completed on 2026-12-01. Reactivated on 2026-12-10 with `date_due` 2026-12-20: green, due 2026-12-20. Without a `date_due`: refused.
 
-*Example* (default `DEFAULT_POSTPONE_DAYS` of 3): a never-paused recurring task, frequency 7, last completed 2026-12-01. Reactivated on 2026-12-05: green, due 2026-12-08. Reactivated on 2026-12-10: S = 2026-12-08 is past, so a `date_due` between 2026-12-10 and 2026-12-17 is required; with 2026-12-12, it's yellow, due 2026-12-12.
+*Example* (default `DEFAULT_POSTPONE_DAYS` of 3): a recurring task that isn't paused, frequency 7, last completed 2026-12-01. Reactivated on 2026-12-05: green, due 2026-12-08. Reactivated on 2026-12-10: S = 2026-12-08 is past, so a `date_due` between 2026-12-10 and 2026-12-17 is required; with 2026-12-12, it's yellow, due 2026-12-12.
 
 Reactivating is idempotent: reactivating a task that's already tracked changes nothing, and the request succeeds.
 
