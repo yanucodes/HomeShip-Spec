@@ -8,6 +8,8 @@ What ships, crew, tasks and supplies are, and how their states change over time.
 |---|---|---|---|---|
 | `DAILY_ROLLOVER_HOUR` | `3` | integer 0–23 | Ship-local hour at which a new ship day begins. | `TIME-SHIP-DAY` |
 | `DEFAULT_POSTPONE_DAYS` | `3` | integer 1–3650 | Days a task's due date moves out when it goes up a level without the crew choosing a new date. Also the least a recurring task can be postponed by. | `TASK-MISSED`, `TASK-POSTPONE` |
+| `SUPPLY_DEADLINE_RED_DAYS` | `1` | integer 1–365, at most `SUPPLY_DEADLINE_YELLOW_DAYS` | A deadline supply that isn't in stock is red once its deadline is at most this many days away. | `SUPPLY-ALERT-DEADLINE` |
+| `SUPPLY_DEADLINE_YELLOW_DAYS` | `7` | integer 1–365, at least `SUPPLY_DEADLINE_RED_DAYS` | A deadline supply that isn't in stock is yellow once its deadline is at most this many days away (and it isn't red). | `SUPPLY-ALERT-DEADLINE` |
 
 ## Time
 
@@ -354,3 +356,150 @@ The daily advance takes effect at the very start of the ship day: no action on s
 ### TASK-DELETE — Deleting a task
 
 Deleting removes the task, whatever its state. Deleting an auto-destruct task resolves it (Ships).
+
+## Supplies
+
+A supply is something the household buys: either something it keeps in stock, e.g. milk or shampoo, or something it needs by a date, e.g. candles for a birthday cake.
+
+### SUPPLY-FIELDS — What a supply records
+
+| Field | Meaning | Values |
+|---|---|---|
+| `name` | What the supply is. | Text. Surrounding whitespace is removed; what remains is 1–200 characters, counted as Unicode code points. Several supplies may have the same name. |
+| `stock_state` | How much the household has. | in stock, running low, or out of stock. |
+| `quantity` | How many units are on hand, as the crew counts them. Informational only: it never affects the stock state or the alert. | A whole number from 0 to 1000; or none. |
+| `date_due` | The deadline: the ship day by which the supply must be bought. | A date, or none. A deadline the crew provides is today or later and at most 365 days after today; otherwise the request is refused. |
+| `alert_state` | How urgent buying it is (`ALERT-LEVELS`). | Derived (`ALERT-DERIVED`) by the rules in this section. |
+
+A supply with a deadline is a **deadline supply**; a supply without one is a **regular supply**.
+
+### SUPPLY-TRACKED — A supply is tracked exactly when its alert state isn't inactive
+
+A supply is **tracked** when its alert state is green, yellow, red or auto-destruct, and **inactive** when its alert state is inactive. An inactive supply has no deadline. Its stock state and quantity are kept, and the crew can still update them (`SUPPLY-STOCK`, `SUPPLY-EDIT`).
+
+A supply becomes inactive when the crew deactivates it (`SUPPLY-DEACTIVATE`), when the crew removes its deadline (`SUPPLY-RESCHEDULE`), when its deadline passes while it's in stock (`SUPPLY-DEADLINE-PASSED`), or when it's set in stock at auto-destruct (`SUPPLY-STOCK`). It becomes tracked again when it's reactivated (`SUPPLY-REACTIVATE`) or given a deadline (`SUPPLY-RESCHEDULE`).
+
+### SUPPLY-ALERT-STOCK — The alert of a regular supply
+
+| `stock_state` | `alert_state` |
+|---|---|
+| in stock | green |
+| running low | yellow |
+| out of stock | red |
+
+A regular supply never reaches auto-destruct.
+
+### SUPPLY-ALERT-DEADLINE — The alert of a deadline supply
+
+A deadline supply that's in stock is green, however close its deadline is. Otherwise (running low or out of stock), its alert follows the number of days from today to its deadline:
+
+| Days until the deadline | `alert_state` |
+|---|---|
+| more than `SUPPLY_DEADLINE_YELLOW_DAYS` | green |
+| more than `SUPPLY_DEADLINE_RED_DAYS`, up to `SUPPLY_DEADLINE_YELLOW_DAYS` | yellow |
+| 0 (due today) up to `SUPPLY_DEADLINE_RED_DAYS` | red |
+| passed | `SUPPLY-DEADLINE-PASSED` |
+
+Running low counts as not in stock: having some but not enough still means something must be bought by the deadline. The alert follows the calendar: since the daily advance takes effect at the very start of the ship day (`TASK-MISSED`), a deadline supply's alert always reflects today.
+
+Examples, with the default `SUPPLY_DEADLINE_RED_DAYS` of 1 and `SUPPLY_DEADLINE_YELLOW_DAYS` of 7. Candles, out of stock, deadline 2026-01-20:
+
+| Today | Days until the deadline | `alert_state` |
+|---|---|---|
+| 2026-01-10 | 10 | green |
+| 2026-01-12 | 8 | green |
+| 2026-01-13 | 7 | yellow |
+| 2026-01-18 | 2 | yellow |
+| 2026-01-19 | 1 | red |
+| 2026-01-20 | 0 | red |
+
+The same candles in stock: green on every one of these days.
+
+A deadline supply keeps its deadline when it's bought. If it runs out again before the deadline, it escalates against the same deadline. *Example:* drinks for a party on 2026-01-20, bought on 2026-01-15 (green). The crew drinks them on 2026-01-18 and sets them out of stock: yellow on 2026-01-18 (2 days left), red on 2026-01-19.
+
+### SUPPLY-DEADLINE-PASSED — When a deadline passes
+
+At the daily advance that starts ship day D, for every tracked deadline supply whose deadline is before D:
+- **In stock:** the supply becomes inactive, and its deadline is removed. The event has passed, so the supply is no longer needed. Its stock state and quantity are kept.
+- **Running low or out of stock:** the supply goes to auto-destruct and keeps its deadline. The countdown runs during D; unless the supply is resolved on D, the ship is destroyed at the next advance (Ships).
+
+An auto-destruct supply stays at auto-destruct until it's resolved (Ships). Later advances don't change it. It's resolved when it's:
+- deactivated (`SUPPLY-DEACTIVATE`);
+- given a new deadline (`SUPPLY-RESCHEDULE`), e.g. because the party was postponed;
+- given no deadline (`SUPPLY-RESCHEDULE`): it becomes inactive;
+- set in stock (`SUPPLY-STOCK`): it becomes inactive, as if it had been in stock when the deadline passed;
+- deleted (`SUPPLY-DELETE`).
+
+So a tracked supply never has a passed deadline unless it's at auto-destruct, and a passed deadline never causes an auto-destruct during a ship day, only at an advance.
+
+*Example* (default settings): candles, deadline 2026-01-20.
+
+| Ship day | Candles not bought | Candles bought on 2026-01-18 |
+|---|---|---|
+| 2026-01-19 | red | green (bought the day before) |
+| 2026-01-20 | red | green |
+| 2026-01-21 (advance) | auto-destruct; the countdown runs during 2026-01-21 | inactive, no deadline |
+| 2026-01-22 (advance) | the ship is destroyed, unless the candles were resolved on 2026-01-21 (Ships) | — |
+
+*Example:* the candles reached auto-destruct on 2026-01-21. The same day, the party is moved to 2026-01-31, and the crew changes the deadline to 2026-01-31: out of stock, 10 days away, so green. The ship isn't destroyed.
+
+*Example:* the candles reached auto-destruct on 2026-01-21. Someone buys them that day and sets them in stock: inactive, no deadline. The ship isn't destroyed.
+
+*Example:* the candles reached auto-destruct on 2026-01-21, and nobody acts. The ship is destroyed at the advance on 2026-01-22, and the candles stay at auto-destruct. On 2026-01-23 the crew deactivates them: inactive, no deadline, and the auto-destruct is resolved (Ships).
+
+### SUPPLY-CREATE — Creating a supply
+
+The crew provides `name` and, optionally, `stock_state` (out of stock if not given), `quantity` and `date_due`. The request is refused, and no supply is created, if a provided `date_due` is in the past or more than 365 days after today, or a provided `quantity` is outside its range (`SUPPLY-FIELDS`).
+
+The new supply is tracked. Its alert follows `SUPPLY-ALERT-STOCK` or `SUPPLY-ALERT-DEADLINE`.
+
+### SUPPLY-STOCK — Changing the stock state
+
+The crew sets a new stock state, at any time:
+- **Tracked supply, not at auto-destruct:** the alert follows the new stock state (`SUPPLY-ALERT-STOCK`, `SUPPLY-ALERT-DEADLINE`).
+- **Auto-destruct supply:** set in stock, it becomes inactive and its deadline is removed; the auto-destruct is resolved (Ships). Set running low or out of stock, the stock state is saved and it stays at auto-destruct.
+- **Inactive supply:** the stock state is saved, and the supply stays inactive.
+
+### SUPPLY-RESCHEDULE — Changing the deadline
+
+The crew sets a new deadline, or none, at any time. A new deadline is checked as in `SUPPLY-FIELDS` (today or later, at most 365 days ahead).
+
+**Tracked supply:**
+- With a new deadline, the alert follows it (`SUPPLY-ALERT-DEADLINE`). Changing the deadline has no penalty: the alert follows the new deadline alone, unlike postponing a task (`TASK-POSTPONE`).
+- With no deadline, a deadline supply becomes inactive, the same result as deactivating it (`SUPPLY-DEACTIVATE`): its stock state and quantity are kept. For a regular supply, which has no deadline to remove, nothing changes: it stays tracked, and the request succeeds.
+- An auto-destruct supply that gets a new deadline, or none, is resolved (Ships).
+
+**Inactive supply:**
+- With a new deadline, it becomes tracked with that deadline: the same result as reactivating it with that deadline (`SUPPLY-REACTIVATE`).
+- With no deadline: nothing changes, it stays inactive, and the request succeeds.
+
+*Example:* candles at auto-destruct since 2026-01-21, out of stock. The party is cancelled, and the crew removes the deadline on 2026-01-21: inactive, still out of stock. The auto-destruct is resolved (Ships).
+
+*Example* (default settings): sunscreen, deactivated for the winter, out of stock. On 2027-05-01 the crew sets a deadline of 2027-05-05, as a reminder to buy it before it gets too sunny: tracked, 4 days away, so yellow.
+
+*Example* (default settings): candles at auto-destruct since 2026-01-21. The crew sets the deadline to 2026-01-21, the same day: resolved, out of stock with 0 days left, so red. Unless they're bought that day, they go to auto-destruct again at the advance on 2026-01-22, and the countdown runs during 2026-01-22.
+
+### SUPPLY-DEACTIVATE — Deactivating stops tracking a supply
+
+Deactivating a tracked supply:
+- `alert_state` becomes inactive, and the deadline is removed.
+- `stock_state` and `quantity` don't change.
+- An auto-destruct supply is resolved (Ships).
+
+Deactivating is idempotent: deactivating an inactive supply changes nothing, and the request succeeds.
+
+### SUPPLY-REACTIVATE — Reactivating makes an inactive supply tracked again
+
+The request may include a `date_due`, checked as in `SUPPLY-CREATE`. The supply becomes tracked, with that deadline (or none), and its alert follows `SUPPLY-ALERT-STOCK` or `SUPPLY-ALERT-DEADLINE`.
+
+Reactivating is idempotent: reactivating a tracked supply changes nothing, and the request succeeds.
+
+*Example:* sunscreen, deactivated for the winter while in stock. In December 2026 someone uses up the last bottle and sets it out of stock; it stays inactive. Reactivated on 2027-05-01 with a deadline of 2027-06-15 (a holiday): out of stock, more than 7 days away, so green.
+
+### SUPPLY-EDIT — Editing a supply
+
+`name` and `quantity` can be edited at any time, whatever the supply's state; `quantity` can also be removed. Nothing else changes: the stock state and the deadline have their own operations (`SUPPLY-STOCK`, `SUPPLY-RESCHEDULE`), because changing them follows rules of its own.
+
+### SUPPLY-DELETE — Deleting a supply
+
+Deleting removes the supply, whatever its state. Deleting an auto-destruct supply resolves it (Ships).
