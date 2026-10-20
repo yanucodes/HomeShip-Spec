@@ -76,7 +76,7 @@ Every date the API accepts or returns for a ship or its items (e.g. a due date) 
 
 ## Alert states
 
-Every task and every supply has exactly one alert state at any time. Alert states are a vocabulary shared by tasks and supplies, so a ship's overall state is computed the same way from both. How an item's alert state is determined is defined per item type (see Tasks, Supplies); what alert states do to the ship is defined under Ships.
+Every task and every supply has exactly one alert state at any time. Alert states are a vocabulary shared by tasks and supplies, so a ship's overall state is computed the same way from both. How an item's alert state is determined is defined per item type (see Tasks, Supplies); what alert states do to the ship is defined under Ships (`SHIP-CONDITION`, `SHIP-SPEED`, `SHIP-DESTROY`).
 
 ### ALERT-LEVELS — The alert states and their order
 
@@ -200,8 +200,8 @@ Completing is allowed at any time, whatever the task's state. `date_last` become
 
 | Task before | Result |
 |---|---|
-| recurring, tracked (any alert) | due today + frequency, green. An auto-destruct task is resolved (Ships). |
-| one-off, tracked (any alert) | inactive, not paused; `date_due` none. An auto-destruct task is resolved (Ships). |
+| recurring, tracked (any alert) | due today + frequency, green. An auto-destruct task is resolved (`SHIP-RESOLVED`). |
+| one-off, tracked (any alert) | inactive, not paused; `date_due` none. An auto-destruct task is resolved (`SHIP-RESOLVED`). |
 | inactive, not paused | nothing else changes. |
 | recurring, paused | stays paused; `days_left` becomes `frequency` and `frozen_alert` green. |
 | one-off, paused | stays inactive, no longer paused: both frozen values become none. |
@@ -287,7 +287,7 @@ Examples for rows 3–4 with a one-off. Completed 2026-02-01, then reactivated w
 Deactivating a tracked task:
 - `alert_state` becomes inactive, and `date_due` becomes none.
 - `days_left` becomes the number of days from today to the old due date, and `frozen_alert` becomes the old alert state.
-- An auto-destruct task is frozen as red with 0 days left. Deactivating it resolves it (Ships).
+- An auto-destruct task is frozen as red with 0 days left. Deactivating it resolves it (`SHIP-RESOLVED`).
 - `frequency` and `date_last` don't change.
 
 Deactivating is idempotent: deactivating a task that's already inactive changes nothing, and the request succeeds.
@@ -324,7 +324,7 @@ Reactivating is idempotent: reactivating a task that's already tracked changes n
 
 At the daily advance that starts ship day D, every tracked task due before D goes one level up, except an auto-destruct one:
 - green → yellow and yellow → red: the due date moves `DEFAULT_POSTPONE_DAYS` days later.
-- red → auto-destruct: the due date becomes D. The countdown runs during D; unless the task is resolved on D, the ship is destroyed at the next advance (Ships).
+- red → auto-destruct: the due date becomes D. The countdown runs during D; unless the task is resolved on D, the ship is destroyed at the next advance (`SHIP-DESTROY`).
 
 Later advances don't change an auto-destruct task: it stays auto-destruct, and its due date stays its countdown day, even after that day has passed. Inactive tasks aren't affected.
 
@@ -338,7 +338,7 @@ Examples, with the default `DEFAULT_POSTPONE_DAYS` of 3, at the advance that sta
 | red, due 2026-01-20 | auto-destruct, due 2026-01-21 |
 | auto-destruct, due 2026-01-15 | unchanged |
 
-The daily advance takes effect at the very start of the ship day: no action on ship day D sees the ship as it was before D's advance. Every ship day gets its own advance, in order: advances that were missed (e.g. during an outage) are made up one ship day at a time, before anything else (Ships). So when an advance reaches a task, it's at most one day past due, and whenever the crew acts, every tracked task except an auto-destruct one is due today or later.
+The daily advance takes effect at the very start of the ship day: no action on ship day D sees the ship as it was before D's advance. Every ship day gets its own advance, in order: advances that were missed (e.g. during an outage) are made up one ship day at a time, before anything else (`SHIP-ADVANCE`). So when an advance reaches a task, it's at most one day past due, and whenever the crew acts, every tracked task except an auto-destruct one is due today or later.
 
 *Example:* a green task due 2026-01-10. No advance runs from 2026-01-11 until 2026-01-21, when the missed advances are made up in order:
 
@@ -347,7 +347,7 @@ The daily advance takes effect at the very start of the ship day: no action on s
 | 2026-01-11 | yellow, due 2026-01-13 |
 | 2026-01-14 | red, due 2026-01-16 |
 | 2026-01-17 | auto-destruct, due 2026-01-17 |
-| 2026-01-18 to 2026-01-21 | unchanged (the ship is destroyed at the 2026-01-18 advance, Ships) |
+| 2026-01-18 to 2026-01-21 | unchanged (the ship is destroyed at the 2026-01-18 advance, `SHIP-DESTROY`) |
 
 ### TASK-EDIT — Editing a task's content
 
@@ -355,7 +355,7 @@ The daily advance takes effect at the very start of the ship day: no action on s
 
 ### TASK-DELETE — Deleting a task
 
-Deleting removes the task, whatever its state. Deleting an auto-destruct task resolves it (Ships).
+Deleting removes the task, whatever its state. Deleting an auto-destruct task resolves it (`SHIP-RESOLVED`).
 
 ## Supplies
 
@@ -421,9 +421,9 @@ A deadline supply keeps its deadline when it's bought. If it runs out again befo
 
 At the daily advance that starts ship day D, for every tracked deadline supply whose deadline is before D:
 - **In stock:** the supply becomes inactive, and its deadline is removed. The event has passed, so the supply is no longer needed. Its stock state and quantity are kept.
-- **Running low or out of stock:** the supply goes to auto-destruct and keeps its deadline. The countdown runs during D; unless the supply is resolved on D, the ship is destroyed at the next advance (Ships).
+- **Running low or out of stock:** the supply goes to auto-destruct and keeps its deadline. The countdown runs during D; unless the supply is resolved on D, the ship is destroyed at the next advance (`SHIP-DESTROY`).
 
-An auto-destruct supply stays at auto-destruct until it's resolved (Ships). Later advances don't change it. It's resolved when it's:
+An auto-destruct supply stays at auto-destruct until it's resolved (`SHIP-RESOLVED`). Later advances don't change it. It's resolved when it's:
 - deactivated (`SUPPLY-DEACTIVATE`);
 - given a new deadline (`SUPPLY-RESCHEDULE`), e.g. because the party was postponed;
 - given no deadline (`SUPPLY-RESCHEDULE`): it becomes inactive;
@@ -439,13 +439,13 @@ So a tracked supply never has a passed deadline unless it's at auto-destruct, an
 | 2026-01-19 | red | green (bought the day before) |
 | 2026-01-20 | red | green |
 | 2026-01-21 (advance) | auto-destruct; the countdown runs during 2026-01-21 | inactive, no deadline |
-| 2026-01-22 (advance) | the ship is destroyed, unless the candles were resolved on 2026-01-21 (Ships) | — |
+| 2026-01-22 (advance) | the ship is destroyed, unless the candles were resolved on 2026-01-21 (`SHIP-DESTROY`) | — |
 
 *Example:* the candles reached auto-destruct on 2026-01-21. The same day, the party is moved to 2026-01-31, and the crew changes the deadline to 2026-01-31: out of stock, 10 days away, so green. The ship isn't destroyed.
 
 *Example:* the candles reached auto-destruct on 2026-01-21. Someone buys them that day and sets them in stock: inactive, no deadline. The ship isn't destroyed.
 
-*Example:* the candles reached auto-destruct on 2026-01-21, and nobody acts. The ship is destroyed at the advance on 2026-01-22, and the candles stay at auto-destruct. On 2026-01-23 the crew deactivates them: inactive, no deadline, and the auto-destruct is resolved (Ships).
+*Example:* the candles reached auto-destruct on 2026-01-21, and nobody acts. The ship is destroyed at the advance on 2026-01-22, and the candles stay at auto-destruct. On 2026-01-23 the crew deactivates them: inactive, no deadline, and the auto-destruct is resolved (`SHIP-RESOLVED`).
 
 ### SUPPLY-CREATE — Creating a supply
 
@@ -457,7 +457,7 @@ The new supply is tracked. Its alert follows `SUPPLY-ALERT-STOCK` or `SUPPLY-ALE
 
 The crew sets a new stock state, at any time:
 - **Tracked supply, not at auto-destruct:** the alert follows the new stock state (`SUPPLY-ALERT-STOCK`, `SUPPLY-ALERT-DEADLINE`).
-- **Auto-destruct supply:** set in stock, it becomes inactive and its deadline is removed; the auto-destruct is resolved (Ships). Set running low or out of stock, the stock state is saved and it stays at auto-destruct.
+- **Auto-destruct supply:** set in stock, it becomes inactive and its deadline is removed; the auto-destruct is resolved (`SHIP-RESOLVED`). Set running low or out of stock, the stock state is saved and it stays at auto-destruct.
 - **Inactive supply:** the stock state is saved, and the supply stays inactive.
 
 ### SUPPLY-RESCHEDULE — Changing the deadline
@@ -467,13 +467,13 @@ The crew sets a new deadline, or none, at any time. A new deadline is checked as
 **Tracked supply:**
 - With a new deadline, the alert follows it (`SUPPLY-ALERT-DEADLINE`). Changing the deadline has no penalty: the alert follows the new deadline alone, unlike postponing a task (`TASK-POSTPONE`).
 - With no deadline, a deadline supply becomes inactive, the same result as deactivating it (`SUPPLY-DEACTIVATE`): its stock state and quantity are kept. For a regular supply, which has no deadline to remove, nothing changes: it stays tracked, and the request succeeds.
-- An auto-destruct supply that gets a new deadline, or none, is resolved (Ships).
+- An auto-destruct supply that gets a new deadline, or none, is resolved (`SHIP-RESOLVED`).
 
 **Inactive supply:**
 - With a new deadline, it becomes tracked with that deadline: the same result as reactivating it with that deadline (`SUPPLY-REACTIVATE`).
 - With no deadline: nothing changes, it stays inactive, and the request succeeds.
 
-*Example:* candles at auto-destruct since 2026-01-21, out of stock. The party is cancelled, and the crew removes the deadline on 2026-01-21: inactive, still out of stock. The auto-destruct is resolved (Ships).
+*Example:* candles at auto-destruct since 2026-01-21, out of stock. The party is cancelled, and the crew removes the deadline on 2026-01-21: inactive, still out of stock. The auto-destruct is resolved (`SHIP-RESOLVED`).
 
 *Example* (default settings): sunscreen, deactivated for the winter, out of stock. On 2027-05-01 the crew sets a deadline of 2027-05-05, as a reminder to buy it before it gets too sunny: tracked, 4 days away, so yellow.
 
@@ -484,7 +484,7 @@ The crew sets a new deadline, or none, at any time. A new deadline is checked as
 Deactivating a tracked supply:
 - `alert_state` becomes inactive, and the deadline is removed.
 - `stock_state` and `quantity` don't change.
-- An auto-destruct supply is resolved (Ships).
+- An auto-destruct supply is resolved (`SHIP-RESOLVED`).
 
 Deactivating is idempotent: deactivating an inactive supply changes nothing, and the request succeeds.
 
@@ -502,7 +502,7 @@ Reactivating is idempotent: reactivating a tracked supply changes nothing, and t
 
 ### SUPPLY-DELETE — Deleting a supply
 
-Deleting removes the supply, whatever its state. Deleting an auto-destruct supply resolves it (Ships).
+Deleting removes the supply, whatever its state. Deleting an auto-destruct supply resolves it (`SHIP-RESOLVED`).
 
 ## Ships
 
