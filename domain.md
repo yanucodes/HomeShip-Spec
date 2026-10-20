@@ -503,3 +503,119 @@ Reactivating is idempotent: reactivating a tracked supply changes nothing, and t
 ### SUPPLY-DELETE — Deleting a supply
 
 Deleting removes the supply, whatever its state. Deleting an auto-destruct supply resolves it (Ships).
+
+## Ships
+
+A ship is a household. Its crew keeps its tasks and supplies in order, and the ship travels a little further each day they do: the better the crew keeps up, the faster it goes.
+
+### SHIP-FIELDS — What a ship records
+
+| Field | Meaning | Values |
+|---|---|---|
+| `shipname` | The ship's name. | Text. Surrounding whitespace is removed; what remains is 1–50 characters, counted as Unicode code points. Several ships may have the same name. |
+| `timezone` | Where the household lives; decides its ship days (`TIME-SHIP-DAY`). | An IANA timezone name, e.g. `Europe/Berlin`. Set at creation, `UTC` if none is given; a name that isn't in the IANA timezone database is refused. Never changed afterwards. |
+| `start_date` | The ship day the current journey began. | A date, or none while the ship is destroyed (`SHIP-DESTROY`). |
+| `distance` | Light-years travelled on the current journey. | A number ≥ 0, in whole hundredths (`SHIP-SPEED`). |
+| `last_advanced_on` | The ship day of the ship's latest daily advance (`SHIP-ADVANCE`). | A date. |
+
+A ship also has two derived values: its condition (`SHIP-CONDITION`) and its speed (`SHIP-SPEED`).
+
+### SHIP-CREATE — A new ship starts its journey on its creation day
+
+A new ship has `start_date` today, `last_advanced_on` today, and `distance` 0. Its creation day counts as already advanced: its first daily advance is the one that starts the next ship day, and that advance credits travel for the whole creation day, however late the ship was created. Who creates a ship and who joins it is defined under Crew.
+
+Examples, with the default `DAILY_ROLLOVER_HOUR` of 3 and timezone `Europe/Berlin`. The ship has no items, so its speed is 1:
+
+| Created (ship-local time) | Today | First advance | `distance` after it |
+|---|---|---|---|
+| 2026-10-20 13:00 | 2026-10-20 | 2026-10-21 03:00 | 1 |
+| 2026-10-21 01:00 | 2026-10-20 | 2026-10-21 03:00, two hours later | 1 |
+
+### SHIP-EDIT — Renaming a ship
+
+`shipname` can be changed at any time, whatever the ship's state; nothing else changes. No other field can be edited: `start_date`, `distance` and `last_advanced_on` follow from the journey, and `timezone` is fixed.
+
+### SHIP-CONDITION — The ship's overall state
+
+The ship's condition is the most severe alert state among its tracked items (tasks and supplies), in the order of `ALERT-LEVELS`. With no tracked items, it's green. Inactive items never affect it.
+
+A destroyed ship's condition is auto-destruct, since an item at auto-destruct is what keeps it destroyed (`SHIP-REVIVE`). `start_date` tells the two cases apart: during a countdown the ship still has one; once it's destroyed, it has none.
+
+### SHIP-SPEED — How fast the ship travels
+
+Speed is in light-years per ship day, from the ship's tracked items:
+
+| Ship's items | Speed |
+|---|---|
+| at least one red or auto-destruct | 0 (the ship is frozen) |
+| otherwise, G green and Y yellow, G + Y > 0 | G / (G + Y), rounded to two decimals |
+| no tracked items | 1 |
+
+Rounding is the usual one: to the nearest hundredth, and a value exactly halfway rounds up. So every speed, and every distance (`SHIP-ADVANCE`), is a whole number of hundredths.
+
+Inactive items don't count, so pausing or deleting an item changes the speed at once.
+
+*Example:* 3 green tasks, 1 yellow supply, 2 inactive tasks: 3 / 4 = 0.75 light-years per day. One task turns red: 0. The red task is paused: 0.75 again.
+
+*Example:* a new ship with no items, or one whose items are all inactive: 1.
+
+Rounding examples:
+
+| G | Y | G / (G + Y) | Speed |
+|---|---|---|---|
+| 2 | 1 | 0.6666… | 0.67 |
+| 1 | 7 | 0.125 | 0.13 (halfway, rounds up) |
+| 1 | 199 | 0.005 | 0.01 (halfway, rounds up) |
+| 1 | 200 | 0.004975… | 0 |
+
+*Example:* 2 green and 1 yellow for three days: the distance grows by 0.67 three times, 2.01 in total.
+
+### SHIP-ADVANCE — What the daily advance does to the ship
+
+Every ship day after the creation day (`SHIP-CREATE`) has exactly one daily advance, and it takes effect at the very start of that day: no action on ship day D sees the ship as it was before D's advance. Every ship day after `last_advanced_on`, up to today, gets its advance, one day at a time, in order, before anything else. So advances that were missed (e.g. during an outage) are made up, with the same rules as any other advance. Each advance sets `last_advanced_on` to its ship day.
+
+At the advance that starts D, in this order:
+1. **Countdown:** if the ship isn't destroyed and an item is at auto-destruct, the ship is destroyed (`SHIP-DESTROY`).
+2. **Travel:** if the ship isn't destroyed, `distance` grows by the ship's speed as it was at the end of D − 1. So D − 1's travel reflects everything the crew did on D − 1.
+3. **Items:** tasks and supplies go through their own advance rules (`TASK-MISSED`, `SUPPLY-DEADLINE-PASSED`).
+
+Because the items come last, an item that goes up a level at D's advance first affects travel at D + 1's advance. That's the grace day: a red item reached at D's advance freezes travel for D, and an item that reaches auto-destruct at D's advance destroys the ship only at D + 1's advance.
+
+*Example:* a ship created on 2026-01-10 with one weekly task, last completed 2026-01-05, so green, due 2026-01-12. Nobody completes it. Default `DEFAULT_POSTPONE_DAYS` of 3.
+
+| Advance | Countdown | Travel (for the day before) | Task after | `distance` after |
+|---|---|---|---|---|
+| 2026-01-11 | — | +1 (green) | green, due 2026-01-12 | 1 |
+| 2026-01-12 | — | +1 | green, due 2026-01-12 | 2 |
+| 2026-01-13 | — | +1 (it was still green on 01-12) | yellow, due 2026-01-15 | 3 |
+| 2026-01-14, 01-15 | — | +0 (yellow alone is 0 / 1) | yellow, due 2026-01-15 | 3 |
+| 2026-01-16 | — | +0 | red, due 2026-01-19 | 3 |
+| 2026-01-17 to 01-20 | — | +0 (frozen) | at 01-20: auto-destruct, due 2026-01-20 | 3 |
+| 2026-01-21 | destroyed | — | auto-destruct | 0, no `start_date` |
+
+### SHIP-DESTROY — Auto-destruct destroys the journey once
+
+An item at auto-destruct has a countdown of one ship day: the day its alert reached auto-destruct. Unless it's resolved (`SHIP-RESOLVED`) that day, the next advance destroys the ship:
+- `distance` becomes 0, and `start_date` becomes none.
+- This happens once. A destroyed ship stays destroyed, without traveling, until it's revived (`SHIP-REVIVE`). Further advances, and further items reaching auto-destruct, don't destroy it again.
+- Its items don't stop: every advance still applies their own rules to them (`SHIP-ADVANCE` step 3), so missed tasks go up a level and deadlines pass as on any other ship. Once revived, the ship travels again only while none of its items is red (`SHIP-SPEED`).
+
+An item at auto-destruct resolved during its countdown day cancels the destruction: the ship keeps its journey.
+
+*Example* (default `DEFAULT_POSTPONE_DAYS` of 3): the ship is destroyed at the 2026-01-21 advance. Another task, green and due 2026-01-22, isn't completed: at the 2026-01-23 advance it goes yellow, due 2026-01-25, although the ship is destroyed.
+
+### SHIP-RESOLVED — Resolving an auto-destruct item
+
+An item at auto-destruct is resolved when its alert leaves auto-destruct, whatever the action, or when it's deleted. The item sections list these actions:
+- tasks: completing (`TASK-COMPLETE`), a frequency rescue (`TASK-FREQUENCY` row 3), deactivating (`TASK-DEACTIVATE`), deleting (`TASK-DELETE`);
+- supplies: setting it in stock (`SUPPLY-STOCK`), a new deadline or none (`SUPPLY-RESCHEDULE`), deactivating (`SUPPLY-DEACTIVATE`), deleting (`SUPPLY-DELETE`).
+
+Only crew actions resolve an item. The daily advance never moves an item out of auto-destruct, so a ship is never revived without someone acting.
+
+### SHIP-REVIVE — A destroyed ship starts a new journey
+
+When the last item at auto-destruct on a destroyed ship is resolved, the ship is revived at once, by that action: `start_date` becomes today, and `distance` stays 0. The new journey's first travel is at the next advance.
+
+*Example* (continuing `SHIP-ADVANCE`): the ship was destroyed at the 2026-01-21 advance. On 2026-01-22 the crew completes the task: green, due 2026-01-29; the ship is revived with `start_date` 2026-01-22. At the 2026-01-23 advance it travels 1 light-year for 2026-01-22.
+
+*Example:* two tasks reach auto-destruct, one at the 2026-01-19 advance and one at the 2026-01-20 advance. The 2026-01-20 advance destroys the ship (the first task's countdown ran out). On 2026-01-20 the crew completes the first task only: the ship stays destroyed, since the second task is still at auto-destruct. At the 2026-01-21 advance the second countdown runs out, but the ship is already destroyed, so nothing more happens. On 2026-01-21 the crew completes the second task: the ship is revived, `start_date` 2026-01-21.
