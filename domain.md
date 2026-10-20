@@ -522,7 +522,7 @@ A ship also has two derived values: its condition (`SHIP-CONDITION`) and its spe
 
 ### SHIP-CREATE — A new ship starts its journey on its creation day
 
-A new ship has `start_date` today, `last_advanced_on` today, and `distance` 0. Its creation day counts as already advanced: its first daily advance is the one that starts the next ship day, and that advance credits travel for the whole creation day, however late the ship was created. Who creates a ship and who joins it is defined under Crew.
+A new ship has `start_date` today, `last_advanced_on` today, and `distance` 0. Its creation day counts as already advanced: its first daily advance is the one that starts the next ship day, and that advance credits travel for the whole creation day, however late the ship was created. Who creates a ship and who joins it is defined under Crew (`CREW-CREATE-SHIP`, `CREW-ADD`).
 
 Examples, with the default `DAILY_ROLLOVER_HOUR` of 3 and timezone `Europe/Berlin`. The ship has no items, so its speed is 1:
 
@@ -619,3 +619,57 @@ When the last item at auto-destruct on a destroyed ship is resolved, the ship is
 *Example* (continuing `SHIP-ADVANCE`): the ship was destroyed at the 2026-01-21 advance. On 2026-01-22 the crew completes the task: green, due 2026-01-29; the ship is revived with `start_date` 2026-01-22. At the 2026-01-23 advance it travels 1 light-year for 2026-01-22.
 
 *Example:* two tasks reach auto-destruct, one at the 2026-01-19 advance and one at the 2026-01-20 advance. The 2026-01-20 advance destroys the ship (the first task's countdown ran out). On 2026-01-20 the crew completes the first task only: the ship stays destroyed, since the second task is still at auto-destruct. At the 2026-01-21 advance the second countdown runs out, but the ship is already destroyed, so nothing more happens. On 2026-01-21 the crew completes the second task: the ship is revived, `start_date` 2026-01-21.
+
+## Crew
+
+A ship's crew is the people who share the household. Each crew member is a user, an account defined under Users, on that ship.
+
+### CREW-MEMBERS — A membership links one user to one ship
+
+A crew membership says that a user is a member of a ship, and with which role. It's identified by the pair of ship and user: there's no other identifier, and a user is a member of a given ship at most once. Being a member of a ship means exactly that such a membership exists.
+
+| Field | Meaning | Values |
+|---|---|---|
+| `ship_id` | The ship. | An existing ship. Never changes. |
+| `user_id` | The user who is a member. Other members see only the user's display name and `user_id`, never their email or username. | An existing user. Never changes. |
+| `role` | The member's title on this ship, e.g. "Captain", "Science Officer" or "Mom". Only a title: it gives no rights. | Text. Surrounding whitespace is removed; what remains is 1–30 characters, counted as Unicode code points. "Crew Member" if none is given. |
+
+- A user can be a member of any number of ships, with a separate membership, and so a separate role, on each.
+- A ship has at least 1 member (`CREW-LEAVE`) and at most 20 (`CREW-ADD`).
+
+*Example:* Anna is a member of two ships: "Captain" on her family's ship, and "Cook" on the ship she shares with friends at a holiday home. That's two memberships, (family ship, Anna) and (holiday ship, Anna). Changing her role on one doesn't change the other. Ben is a member of the family ship too, as "Engineer": a third membership, (family ship, Ben).
+
+### CREW-RIGHTS — Every member has the same rights
+
+Every member can do everything on the ship: all task and supply operations, renaming the ship (`SHIP-EDIT`), adding members (`CREW-ADD`), and changing their own role (`CREW-ROLE`). Roles make no difference. A user who isn't a member can't see or change anything on the ship.
+
+### CREW-CREATE-SHIP — Creating a ship
+
+Any user can create a ship (`SHIP-CREATE`). The creator becomes its first member, with the role they give, or "Crew Member".
+
+### CREW-ADD — Adding a member
+
+A member adds another user by that user's email, with a role the adding member chooses (or "Crew Member"). The user is a member at once; they aren't asked. Which user an email belongs to, ignoring upper and lower case, is defined under Users.
+
+The request is refused, and nothing changes, if:
+- no user has that email;
+- that user is already a member of the ship (whatever role the request gives);
+- the ship already has 20 members.
+
+*Example:* Ben signed up as `ben@example.com`. Anna adds `Ben@Example.com` with the role "Science Officer": Ben is a member at once, as "Science Officer". Anna adds him again with the role "Cook": refused; he stays "Science Officer".
+
+### CREW-ROLE — Changing a role
+
+A member can change their own role at any time, and only their own. A role set by whoever added them stays until they change it.
+
+### CREW-NO-REMOVAL — Members can't remove each other
+
+No member can remove another member from the ship. A member stops being one only by leaving (`CREW-LEAVE`) or by deleting their account (`CREW-ACCOUNT-DELETED`).
+
+### CREW-LEAVE — Leaving a ship
+
+Any member can leave a ship at any time. If they're the last member, the ship is deleted, with all its tasks and supplies. This can't be undone.
+
+### CREW-ACCOUNT-DELETED — Deleting a user account
+
+Deleting a user account removes the user from every ship, exactly as if they had left each one (`CREW-LEAVE`): ships where they were the last member are deleted.
