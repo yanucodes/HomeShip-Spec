@@ -1,6 +1,6 @@
 # HomeShip API — Specifications
 
-The files in this directory specify how the HomeShip API is expected to behave. They are the source of truth: when the implementation disagrees with a spec, the implementation is wrong, unless the spec is deliberately changed.
+The files in this repository specify how the HomeShip API is expected to behave, in every implementation of it. They are the source of truth: when an implementation disagrees with a spec, the implementation is wrong, unless the spec is deliberately changed.
 
 Specs describe behavior only (inputs, outputs, observable effects), never how that behavior is implemented.
 
