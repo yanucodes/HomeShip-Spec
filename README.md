@@ -6,7 +6,7 @@ Specs describe behavior only (inputs, outputs, observable effects), never how th
 
 | File | Specifies |
 |---|---|
-| `domain.md` | The domain: time, alert states, tasks, supplies, ships and their journey, crew. |
+| `domain.md` | The domain: time, alert states, tasks, supplies, ships and their journey, crew, users. |
 
 ## Conventions
 

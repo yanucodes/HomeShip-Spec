@@ -1,6 +1,6 @@
 # HomeShip — Domain Specification
 
-What ships, crew, tasks and supplies are, and how their states change over time. Read `README.md` in this directory first: it defines rule IDs, settings, and the other conventions used here.
+What ships, crew, tasks, supplies and users are, and how their states change over time. Read `README.md` in this directory first: it defines rule IDs, settings, and the other conventions used here.
 
 ## Settings
 
@@ -673,3 +673,121 @@ Any member can leave a ship at any time. If they're the last member, the ship is
 ### CREW-ACCOUNT-DELETED — Deleting a user account
 
 Deleting a user account removes the user from every ship, exactly as if they had left each one (`CREW-LEAVE`): ships where they were the last member are deleted.
+
+## Users
+
+A user is a person's account. A user can be a member of any number of ships (`CREW-MEMBERS`), or of none.
+
+### USER-FIELDS — What a user records
+
+| Field | Meaning | Values |
+|---|---|---|
+| `user_id` | Identifies the user. | Assigned at sign-up. Never changes. |
+| `username` | A login name. Other members never see it (`CREW-MEMBERS`). | Text. Surrounding whitespace is removed; what remains is 3–30 characters, each an ASCII letter, a digit or `_`. So a username never contains `@` or whitespace. Kept as the user typed it; unique ignoring case (`USER-LOGIN-NAMES`). |
+| `display_name` | The name other members see. | Text. Surrounding whitespace is removed; what remains is 1–30 characters, counted as Unicode code points. Several users may have the same display name. |
+| `email` | The user's email address. It's a login name, and other users add the user to a ship by it (`CREW-ADD`). Other members never see it (`CREW-MEMBERS`). | Surrounding whitespace is removed; what remains is an email address as defined in `USER-EMAIL-FORMAT`. Kept in lowercase; unique (`USER-LOGIN-NAMES`). |
+
+Every field always has a value: none can be removed. A user sees all their own fields. A user also has a password; only a hash of it is recorded (`USER-PASSWORD`).
+
+### USER-EMAIL-FORMAT — What counts as an email address
+
+An email address is ASCII only and has exactly one `@`:
+- **Before the `@`** (the local part): 1–64 characters, each a letter, a digit, or one of ``! # $ % & ' * + / = ? ^ _ ` { | } ~ . -``. It doesn't start or end with a dot, and has no two dots in a row.
+- **After the `@`** (the domain): at least two labels separated by dots. Each label is 1–63 characters, letters, digits and hyphens, and doesn't start or end with a hyphen.
+- At most 254 characters in all.
+
+Anything else is refused, including quoted local parts (`"anna k"@example.com`), IP addresses as domains, and non-ASCII characters anywhere.
+
+| Given | Result |
+|---|---|
+| `anna@example.com` | valid |
+| `Anna.K+home@mail.example.co.uk` | valid; kept as `anna.k+home@mail.example.co.uk` |
+| ` anna@example.com ` (surrounding spaces) | valid; kept as `anna@example.com` |
+| `an na@example.com` | refused: whitespace inside |
+| `anna` | refused: no `@` |
+| `anna@@example.com` | refused: more than one `@` |
+| `anna@localhost` | refused: the domain has one label |
+| `.anna@example.com` | refused: starts with a dot |
+| `anna..k@example.com` | refused: two dots in a row |
+| `anna@-example.com` | refused: a label starts with a hyphen |
+| `anna@` + a 64-character label + `.com` | refused: a label is longer than 63 characters |
+| `anna@münchen.de` | refused: not ASCII |
+| `"anna k"@example.com` | refused: quoted local part |
+| `Anna <anna@example.com>` | refused: a name with an address, not an address |
+
+### USER-LOGIN-NAMES — Usernames and emails are matched ignoring case
+
+The username and the email are both login names. Wherever the API looks up a user by a login name (at login, when checking whether one is taken, when adding a member by email, `CREW-ADD`), it first removes surrounding whitespace, and upper and lower case don't matter.
+- A username is kept in the case the user typed it, and returned that way. No two users have usernames that differ only in case.
+- An email is kept, and returned, in lowercase.
+
+A login name containing `@` is an email; one without is a username.
+
+*Example:* Anna signs up with username ` Anna ` and email `Anna@Example.com`. Her account has username `Anna` and email `anna@example.com`. She can log in as `Anna`, `anna`, `ANNA@example.COM`, or `anna ` with a trailing space. A later sign-up with username `anna`, or with email `anna@EXAMPLE.com`, is refused (`USER-SIGN-UP`). A sign-up with username `An na` is refused: whitespace inside.
+
+### USER-PASSWORD — The password
+
+A user has a password, which proves who they are. It's given at sign-up and at login. The current password is also required to change the username, the email or the password (`USER-EDIT`), and to delete the account (`USER-DELETE`).
+
+- Any characters, including surrounding whitespace, which is kept. Unicode-normalized (`USER-PASSWORD-NORMALIZED`); what results is 8–128 characters, counted as Unicode code points. Never the username or email (`USER-PASSWORD-NOT-NAME`).
+- The password itself is never stored, only a one-way hash of it. Nobody, including whoever runs the server, can read a password back. A password given later is checked against the hash.
+- It's never returned by the API.
+
+### USER-PASSWORD-NORMALIZED — Passwords that look the same are the same
+
+Every password the API receives (at sign-up, at login, as a new or current password in `USER-EDIT` and `USER-DELETE`) is first normalized to Unicode Normalization Form KC (NFKC). Everything else applies to the result: its length is counted after normalizing, and two passwords are the same exactly when they're equal after normalizing.
+
+Normalizing unifies different encodings of the same character, and folds compatibility characters (e.g. fullwidth letters, superscript digits) into their plain form. It never removes accents or changes upper and lower case.
+
+Anna signs up with the password in the first column. Later she logs in with the second:
+
+| Signed up with | Logs in with | Result |
+|---|---|---|
+| `café2026!`, `é` as one code point (U+00E9) | `café2026!`, `é` as `e` + combining accent (U+0065 U+0301) | logged in: the same password |
+| `café2026!` | `cafe2026!` | refused: a different password |
+| `café2026!` | `CAFÉ2026!` | refused: a different password |
+| `pass²word` | `pass2word` | logged in: `²` becomes `2` |
+| `ＡＢＣ12345` (fullwidth letters) | `ABC12345` | logged in: fullwidth letters become plain ones |
+| `secret-pass` | `secret-pass ` (trailing space) | refused: a different password; surrounding whitespace counts |
+
+*Example:* `café123`, with `é` typed as `e` + combining accent, is 8 code points as typed and 7 after normalizing: refused at sign-up, too short.
+
+### USER-PASSWORD-NOT-NAME — A password is never the username or email
+
+A user's password, normalized (`USER-PASSWORD-NORMALIZED`), never equals their username or their email, ignoring case. A request that would break this is refused and changes nothing: at sign-up, and when changing the password, the username or the email (`USER-EDIT`).
+
+*Example:* Anna signs up with username `kitchen_plant_rocket` and password `Kitchen_Plant_Rocket`: refused. With password `kitchen_plant_rocket_7`: done. Later she changes her username to `Kitchen_Plant_Rocket_7`, sending her current password: refused, it would equal her password.
+
+### USER-SIGN-UP — Creating an account
+
+Anyone can sign up, without being logged in. They provide `username`, `display_name`, `email` and `password`, all required.
+
+The request is refused, and no account is created, if:
+- a field is missing or outside its values (`USER-FIELDS`, `USER-PASSWORD`);
+- another user has that username or that email, ignoring case (`USER-LOGIN-NAMES`). The refusal says which of the two is taken;
+- the password equals the username or the email, ignoring case (`USER-PASSWORD-NOT-NAME`).
+
+The new user is a member of no ship.
+
+A username or email whose account was deleted can be used again: nothing of the deleted account is kept.
+
+### USER-EDIT — Changing account details
+
+A user can change their own `display_name`, `username`, `email` and `password`, and nobody else's.
+- **Display name:** changed with no further check.
+- **Username, email, password:** a request that includes any of them must also include the user's current password. Without it, or with a wrong one, the request is refused and nothing changes. This holds even when the value sent equals the current one.
+- The new values are checked as at sign-up (`USER-FIELDS`, `USER-PASSWORD`). A new username or email that another user already has, ignoring case, is refused, and the refusal says which. A user's own username or email doesn't count as taken, so they can change only its case.
+
+A refused request changes nothing, including the fields in it that were valid.
+
+*Example:* Anna (username `Anna`, email `anna@example.com`) changes her username to `anna_k`, sending her current password: done. Then she changes her display name to "Anna K." without a password: done. Then she changes her email to `ANNA.K@example.com` without a password: refused.
+
+*Example:* Ben's username is `ben`, his email `ben@example.com`. Anna tries to change her username to `Ben`: refused, the username is taken. Ben changes his own to `Ben`, with his password: done.
+
+*Example:* Anna's display name is "Anna". In one request, with her current password, she sends the display name "Anna K." and the email `ben@example.com`: refused, the email is taken. Her display name stays "Anna".
+
+### USER-DELETE — Deleting an account
+
+A user can delete their own account, and only their own. The request must include the user's current password; without it, or with a wrong one, it's refused and nothing changes.
+
+Deleting removes the user from every ship (`CREW-ACCOUNT-DELETED`): ships where they were the last member are deleted, with all their tasks and supplies. This can't be undone.
